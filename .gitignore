@@ -1,0 +1,12 @@
+.env
+config.py
+__pycache__/
+*.pyc
+*.pptx
+venv/
+.venv/
+temp_*.jpg
+processed_*.jpg
+*.jpg
+*.jpeg
+*.png
