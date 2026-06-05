@@ -7,3 +7,4 @@ pytesseract
 opencv-python
 Pillow
 easyocr
+google-generativeai
