@@ -153,10 +153,14 @@ class OCRPointsHandler:
 
     def parse_markdown_to_slides(self, text, topic):
         """
-        Parses Markdown-formatted text (## headings + paragraphs)
-        into clean slide dicts. Each ## section becomes its own slide(s).
-        Long sections automatically overflow to additional slides.
+        Handles both:
+        - Markdown format: ## Section Heading
+        - Plain text format: standalone short title lines + paragraphs
+        Each section becomes its own slide(s), 4 points per slide max.
+        Text is never truncated.
         """
+        import re
+
         lines = text.splitlines()
         slides = []
         current_heading = topic
@@ -170,10 +174,34 @@ class OCRPointsHandler:
                     label = heading if i == 0 else f"{heading} (cont.)"
                     slides.append({"heading": label, "points": chunk})
 
+        def is_section_title(line):
+            """
+            Detects a standalone section title:
+            - Short line (under 60 chars)
+            - No sentence-ending punctuation
+            - Not starting with a number followed by content
+            - Not a bullet point
+            """
+            stripped = line.strip()
+            if len(stripped) > 60:
+                return False
+            if stripped.endswith(('.', ',', ':', ';', '?', '!')):
+                return False
+            if re.match(r'^\d+\.', stripped):
+                return False
+            if stripped.startswith(('-', '*', '•')):
+                return False
+            # Must have at least 2 words to be a real heading
+            if len(stripped.split()) < 2:
+                return False
+            return True
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
+
+            # Detect Markdown ## headings
             heading_match = re.match(r'^#{1,3}\s+(.*)', line)
             if heading_match:
                 if current_points:
@@ -181,16 +209,32 @@ class OCRPointsHandler:
                     current_points = []
                 current_heading = heading_match.group(1).strip()
                 continue
-            if len(line) < 15:
+
+            # Skip very short noise
+            if len(line) < 10:
                 continue
+
+            # Detect plain-text standalone title lines
+            if is_section_title(line):
+                if current_points:
+                    flush(current_heading, current_points)
+                    current_points = []
+                current_heading = line
+                continue
+
+            # Regular content line — clean and add
             line = re.sub(r'\s+', ' ', line)
             current_points.append(line)
 
+        # Flush final section
         if current_points:
             flush(current_heading, current_points)
 
         if not slides:
-            slides.append({"heading": topic, "points": ["No content found."]})
+            slides.append({
+                "heading": topic,
+                "points": ["No content found."]
+            })
 
         return slides
 
