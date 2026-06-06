@@ -243,3 +243,58 @@ class OCRPointsHandler:
 
         if extracted_data:
             points_list.append(extracted_data)
+
+    def parse_markdown_to_slides(self, text, topic):
+        """
+        Parses Markdown-formatted text (## headings + paragraphs)
+        into clean slide dicts. Each ## section becomes its own slide(s).
+        Long sections automatically overflow to additional slides.
+        """
+        import re
+
+        lines = text.splitlines()
+        slides = []
+
+        current_heading = topic
+        current_points = []
+
+        def flush(heading, points):
+            """Split accumulated points into slides of 4 each."""
+            chunk_size = 4
+            for i in range(0, max(len(points), 1), chunk_size):
+                chunk = points[i: i + chunk_size]
+                if chunk:
+                    label = heading if i == 0 else f"{heading} (cont.)"
+                    slides.append({"heading": label, "points": chunk})
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Detect Markdown headings: # Title  or  ## Section
+            heading_match = re.match(r'^#{1,3}\s+(.*)', line)
+            if heading_match:
+                # Save previous section
+                if current_points:
+                    flush(current_heading, current_points)
+                    current_points = []
+                current_heading = heading_match.group(1).strip()
+                continue
+
+            # Skip very short noise lines
+            if len(line) < 15:
+                continue
+
+            # Clean up line
+            line = re.sub(r'\s+', ' ', line)
+            current_points.append(line)
+
+        # Flush last section
+        if current_points:
+            flush(current_heading, current_points)
+
+        if not slides:
+            slides.append({"heading": topic, "points": ["No content found."]})
+
+        return slides

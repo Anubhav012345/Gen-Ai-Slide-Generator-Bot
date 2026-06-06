@@ -1,3 +1,4 @@
+import os
 import telebot
 import requests
 from ocr import OCRHandler
@@ -46,7 +47,7 @@ class TelegramBot:
 
             elif ppt_type == "points":
                 if len(self.question_data["Points"]) == 0:
-                    self.bot.send_message(chat_id, "❌ No points data added yet. Send some images first.")
+                    self.bot.send_message(chat_id, "❌ No points data added yet. Send images or a .txt file first.")
                     return
                 output_file = self.ppt_handler.create_points_presentation(
                     points_list=self.question_data["Points"],
@@ -65,13 +66,13 @@ class TelegramBot:
             with open(output_file, "rb") as f:
                 self.bot.send_document(chat_id, f)
 
-            # Reset data after sending
-            self.question_data = {
-                "Question": [],
-                "Options": [],
-                "Year": [],
-                "Points": []
-            }
+            import os as _os
+            try:
+                _os.remove(output_file)
+            except Exception:
+                pass
+
+            self.question_data = {"Question": [], "Options": [], "Year": [], "Points": []}
             self.presentation_settings = {
                 "title": "NEXT LEVEL ACADEMY",
                 "topic": "General Questions",
@@ -95,7 +96,7 @@ class TelegramBot:
                 "/set_teacher - Set the teacher's name\n"
                 "/set_type - Set PPT type (mcq or points)\n"
                 "/status - Check current settings\n\n"
-                "📸 Send images to add content\n"
+                "📸 Send images OR 📄 send a .txt/.md file to add content\n"
                 "✅ Send 'nextlevel' to generate the presentation"
             )
             self.bot.reply_to(message, welcome_text)
@@ -134,6 +135,7 @@ class TelegramBot:
             )
             self.bot.reply_to(message, status)
 
+        # ── PHOTO handler ──────────────────────────────────────────────
         @self.bot.message_handler(content_types=['photo'])
         def handle_photo(message):
             try:
@@ -142,31 +144,81 @@ class TelegramBot:
                 self.bot.send_message(message.chat.id, "📸 Image received. Processing...")
 
                 if self.presentation_settings["ppt_type"] == "mcq":
-                    extracted_data = self.ocr_handler.extract_text_from_image(file_id)
-                    if extracted_data:
-                        self.ocr_handler.accumulate_questions(extracted_data, self.question_data)
+                    extracted_text = self.ocr_handler.extract_text_from_image(file_id)
+                    if extracted_text:
+                        self.ocr_handler.accumulate_questions(extracted_text, self.question_data)
                         self.bot.send_message(
                             message.chat.id,
-                            f"✅ Questions extracted! Total questions: {len(self.question_data['Question'])}"
+                            f"✅ Questions extracted! Total: {len(self.question_data['Question'])}"
                         )
                     else:
                         self.bot.send_message(message.chat.id, "⚠️ No questions detected in this image.")
 
                 elif self.presentation_settings["ppt_type"] == "points":
-                    extracted_data = self.ocr_points_handler.extract_text_from_image(file_id)
-                    if extracted_data:
-                        self.ocr_points_handler.accumulate_points(extracted_data, self.question_data["Points"])
+                    topic = self.presentation_settings["topic"]
+                    raw_text = self.ocr_points_handler.extract_text_from_image(file_id)
+                    if raw_text:
+                        slides = self.ocr_points_handler.parse_text_to_slides(raw_text, topic)
+                        self.question_data["Points"].extend(slides)
                         self.bot.send_message(
                             message.chat.id,
-                            f"✅ Points extracted! Total slides ready: {len(self.question_data['Points'])}\n"
-                            f"Heading: {extracted_data.get('heading', 'N/A')}\n"
-                            f"Points: {len(extracted_data.get('points', []))}"
+                            f"✅ Extracted {len(slides)} slide(s) from image!\n"
+                            f"Total slides ready: {len(self.question_data['Points'])}"
                         )
                     else:
                         self.bot.send_message(message.chat.id, "⚠️ No text detected in this image.")
 
             except Exception as e:
                 self.bot.send_message(message.chat.id, f"❌ Error processing image: {str(e)}")
+
+        # ── DOCUMENT handler (.txt / .md files) ───────────────────────
+        @self.bot.message_handler(content_types=['document'])
+        def handle_document(message):
+            try:
+                doc = message.document
+                file_name = doc.file_name or ""
+                ext = file_name.lower().split(".")[-1]
+
+                if ext not in ("txt", "md"):
+                    self.bot.send_message(
+                        message.chat.id,
+                        "⚠️ Only .txt or .md files are supported for points mode.\n"
+                        "For MCQ images, send as a photo."
+                    )
+                    return
+
+                if self.presentation_settings["ppt_type"] != "points":
+                    self.bot.send_message(
+                        message.chat.id,
+                        "⚠️ Text files only work in 'points' mode.\n"
+                        "Use /set_type and enter: points"
+                    )
+                    return
+
+                self.bot.send_message(message.chat.id, "📄 File received. Processing...")
+
+                # Download file
+                file_info = self.bot.get_file(doc.file_id)
+                file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+                response = requests.get(file_url)
+                response.raise_for_status()
+
+                # Decode text
+                raw_text = response.content.decode("utf-8", errors="ignore")
+
+                topic = self.presentation_settings["topic"]
+                slides = self.ocr_points_handler.parse_markdown_to_slides(raw_text, topic)
+                self.question_data["Points"].extend(slides)
+
+                self.bot.send_message(
+                    message.chat.id,
+                    f"✅ File processed! Created {len(slides)} slide(s).\n"
+                    f"Total slides ready: {len(self.question_data['Points'])}\n\n"
+                    f"Send 'nextlevel' to generate the presentation."
+                )
+
+            except Exception as e:
+                self.bot.send_message(message.chat.id, f"❌ Error processing file: {str(e)}")
 
         @self.bot.message_handler(func=lambda msg: msg.text and msg.text.lower() == "nextlevel")
         def handle_nextlevel(message):
